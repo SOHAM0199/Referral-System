@@ -21,17 +21,35 @@ function escapeHtml(str) {
   }[c]));
 }
 
+function formatDateTime(iso) {
+  if (!iso) return '';
+  const parsed = iso.includes('T') || iso.includes('Z') ? iso : iso.replace(' ', 'T') + 'Z';
+  const then = new Date(parsed);
+  if (isNaN(then.getTime())) return iso;
+  return then.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+function formatDateOnly(iso) {
+  if (!iso) return '';
+  const parsed = iso.includes('T') || iso.includes('Z') ? iso : iso.replace(' ', 'T') + 'Z';
+  const then = new Date(parsed);
+  if (isNaN(then.getTime())) return iso;
+  return then.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
 function timeAgo(iso) {
-  const then = new Date(iso.replace(' ', 'T') + 'Z');
-  const diffMs = Date.now() - then.getTime();
-  const mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 30) return `${days}d ago`;
-  return then.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return formatDateTime(iso);
 }
 
 const STATUS_LABEL = {
@@ -75,7 +93,7 @@ async function renderAuthGate() {
         ${showRegister ? `
           <div class="gate-tabs" role="tablist">
             <button class="gate-tab is-active" data-form="login" type="button">Sign in</button>
-            <button class="gate-tab" data-form="register" type="button">Join with an invite</button>
+            <button class="gate-tab" data-form="register" type="button">${!hasAdmin ? 'Create Admin Account' : 'Join with an invite'}</button>
           </div>
         ` : ''}
 
@@ -92,9 +110,11 @@ async function renderAuthGate() {
 
         ${showRegister ? `
           <form id="registerForm" class="gate-form" hidden>
-            <label>Invite code
-              <input type="text" name="inviteCode" required value="${escapeHtml(inviteFromLink)}" placeholder="Paste the code from your invite link" />
-            </label>
+            ${hasAdmin ? `
+              <label>Invite code
+                <input type="text" name="inviteCode" required value="${escapeHtml(inviteFromLink)}" placeholder="Paste the code from your invite link" />
+              </label>
+            ` : ''}
             <label>Full name
               <input type="text" name="name" required autocomplete="name" />
             </label>
@@ -106,7 +126,7 @@ async function renderAuthGate() {
             </label>
             <p class="form-hint">At least 6 characters.</p>
             <p class="form-error" id="registerError"></p>
-            <button type="submit" class="btn btn--primary btn--block">Create account</button>
+            <button type="submit" class="btn btn--primary btn--block">${!hasAdmin ? 'Create Admin Account' : 'Create account'}</button>
           </form>
         ` : ''}
       </div>
@@ -269,12 +289,23 @@ function renderFeed() {
 function feedCard(r) {
   const isMine = r.requester_id === state.user.id;
   const canDelete = isMine || (state.user && state.user.is_admin);
+  const myReferral = r.referral && r.referral.referrer_id === state.user.id ? r.referral : null;
+
+  let buttonHtml = '';
+  if (isMine) {
+    buttonHtml = `<button class="btn btn--ghost btn--block" disabled>Your request</button>`;
+  } else if (myReferral) {
+    buttonHtml = `<button class="btn btn--ghost btn--block" disabled style="color: var(--accent); font-weight: 600;">✔ Referral submitted</button>`;
+  } else if (r.status !== 'closed') {
+    buttonHtml = `<button class="btn btn--accent btn--block js-connect" data-id="${r.id}" data-title="${escapeHtml(r.title)}">Submit referral details</button>`;
+  }
+
   return `
     <article class="card ${isMine ? 'card--mine' : ''}">
       <div class="card-top">
         ${statusBadge(r.status)}
         <div style="display: flex; align-items: center; gap: 0.5rem;">
-          <span class="card-meta">${timeAgo(r.created_at)}</span>
+          <span class="card-meta">${formatDateOnly(r.created_at)}</span>
           ${canDelete ? `<button class="btn btn--ghost btn--sm js-delete-request" data-id="${r.id}" data-title="${escapeHtml(r.title)}" style="color: var(--coral); padding: 0.15rem 0.45rem;">Delete</button>` : ''}
         </div>
       </div>
@@ -284,10 +315,7 @@ function feedCard(r) {
         <span class="card-by">Asked by ${escapeHtml(r.requester_name)}${isMine ? ' <span class="chip chip--me">you</span>' : ''}</span>
         <span class="card-connections">${r.connection_count} connected</span>
       </div>
-      ${isMine
-        ? `<button class="btn btn--ghost btn--block" disabled>Your request</button>`
-        : (r.status !== 'closed' ? `<button class="btn btn--secondary btn--block js-connect" data-id="${r.id}" data-title="${escapeHtml(r.title)}">I can connect &amp; refer</button>` : '')
-      }
+      ${buttonHtml}
       ${renderCommentsSection(r)}
     </article>
   `;
@@ -328,16 +356,16 @@ function openNewRequestModal() {
 
 function openConnectModal(requestId, title) {
   renderModal(`
-    <h3>Connect on "${escapeHtml(title)}"</h3>
-    <p class="modal-sub">Provide your referral details to connect with the requester.</p>
+    <h3>Submit referral details for "${escapeHtml(title)}"</h3>
+    <p class="modal-sub">Provide your referral details so the requester is notified that you have referred them.</p>
     <form id="connectForm" class="modal-form">
       <label>Give your referral details here
-        <textarea name="note" rows="4" required placeholder="Give your referral details here\u2026"></textarea>
+        <textarea name="note" rows="4" required placeholder="Describe the referral you made (e.g. Introduced them to hiring manager, submitted resume)\u2026"></textarea>
       </label>
       <p class="form-error" id="connectError"></p>
       <div class="modal-actions">
         <button type="button" class="btn btn--ghost" data-close>Cancel</button>
-        <button type="submit" class="btn btn--primary">Connect &amp; Submit Details</button>
+        <button type="submit" class="btn btn--accent">Submit referral details</button>
       </div>
     </form>
   `);
@@ -348,7 +376,7 @@ function openConnectModal(requestId, title) {
     try {
       await API.connect(requestId, { note: fd.get('note') });
       closeModal();
-      toast('You\u2019re connected. They\u2019ve been notified.');
+      toast('Referral submitted! The requester has been notified.');
       switchTab('feed');
     } catch (err) {
       $('#connectError').textContent = err.message;
@@ -380,18 +408,23 @@ function mineCard(r) {
   const canDelete = r.requester_id === state.user.id || (state.user && state.user.is_admin);
   const connections = r.connections.map((c) => `
     <li class="thread-item">
-      <strong>${escapeHtml(c.referrer_name)}</strong> connected ${timeAgo(c.created_at)}
+      <strong>${escapeHtml(c.referrer_name)}</strong> connected on ${formatDateTime(c.created_at)}
       ${c.note ? `<div class="thread-note">"${escapeHtml(c.note)}"</div>` : ''}
       <span class="chip chip--${c.status}">${c.status === 'referred' ? 'Referral submitted' : c.status === 'connected' ? 'Awaiting referral' : c.status}</span>
     </li>`).join('');
 
   const referralBlock = r.referral ? `
-    <div class="thread-referral">
-      <div class="thread-referral-head">Referral from ${escapeHtml(r.referral.referrer_name)}</div>
-      <p>${escapeHtml(r.referral.description)}</p>
-      ${r.thanks
-        ? `<div class="thanked-note">Thank-you letter sent ${timeAgo(r.thanks.created_at)}. ✓</div>`
-        : `<button class="btn btn--accent js-thank" data-referral-id="${r.referral.id}" data-referrer="${escapeHtml(r.referral.referrer_name)}">Say thank you</button>`}
+    <div class="thread-referral" style="border: 1.5px solid var(--accent, #3b82f6); background: rgba(59, 130, 246, 0.04); padding: 1.25rem; border-radius: 8px; margin-top: 1rem;">
+      <div style="font-weight: 700; font-size: 1.05rem; color: var(--accent, #3b82f6); margin-bottom: 0.35rem;">
+        🎉 ${escapeHtml(r.referral.referrer_name)} has referred you!
+      </div>
+      <div class="thread-referral-head">Referral details &bull; ${formatDateTime(r.referral.created_at)}</div>
+      <p style="margin-top: 0.5rem; line-height: 1.5;">${escapeHtml(r.referral.description)}</p>
+      <div style="margin-top: 1rem;">
+        ${r.thanks
+          ? `<div class="thanked-note">Thank-you letter sent on ${formatDateTime(r.thanks.created_at)}. ✓</div>`
+          : `<button class="btn btn--accent js-thank" data-referral-id="${r.referral.id}" data-referrer="${escapeHtml(r.referral.referrer_name)}">Say thank you</button>`}
+      </div>
     </div>` : '';
 
   return `
@@ -488,7 +521,7 @@ function referringCard(r) {
   } else if (myReferral) {
     actionBlock = `
       <div class="thread-referral">
-        <div class="thread-referral-head">Your referral</div>
+        <div class="thread-referral-head">Your referral &bull; ${formatDateTime(myReferral.created_at)}</div>
         <p>${escapeHtml(myReferral.description)}</p>
         ${r.thanks ? renderReceivedLetter(r.thanks) : `<p class="card-empty">Waiting on their thank-you.</p>`}
       </div>`;
@@ -678,7 +711,7 @@ function renderAdmin() {
           ${invites.map((inv) => `
             <tr>
               <td>${escapeHtml(inv.label || '\u2014')}</td>
-              <td><code class="invite-code">${window.location.origin}/?invite=${inv.code}</code></td>
+              <td><code class="invite-code">${window.location.origin}${window.location.pathname}?invite=${inv.code}</code></td>
               <td>${inv.uses}${inv.max_uses ? ` / ${inv.max_uses}` : ''}</td>
               <td>${inv.is_active ? '<span class="chip chip--connected">Active</span>' : '<span class="chip">Off</span>'}</td>
               <td>
@@ -695,7 +728,7 @@ function renderAdmin() {
   $('#addMemberBtn').addEventListener('click', openAddMemberModal);
   $('#newInviteBtn').addEventListener('click', openNewInviteModal);
   $$('.js-copy').forEach((btn) => btn.addEventListener('click', () => {
-    const link = `${window.location.origin}/?invite=${btn.dataset.code}`;
+    const link = `${window.location.origin}${window.location.pathname}?invite=${btn.dataset.code}`;
     navigator.clipboard.writeText(link).then(() => toast('Invite link copied.'));
   }));
   $$('.js-toggle').forEach((btn) => btn.addEventListener('click', async () => {
